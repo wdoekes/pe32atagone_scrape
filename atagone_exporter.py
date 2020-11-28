@@ -23,6 +23,7 @@ QuickAndDirtyJavaScriptParser found below.
 
 TODO:
 - Add license, year, docs, copyright
+- Add logo ref and mention that we're not affiliated
 - Extract values from series in usable fashion
 - Figure out how we want to export this to prometheus
 - Auto-cleanup cached files once we have the data
@@ -304,7 +305,7 @@ class QuickAndDirtyJavaScriptParser:
             return cls.JS_FUNCTION(token, cls.extract_paren(tokeniter))
         if isinstance(token, (cls.JS_IDENTIFIER, str, float, int)):
             return token
-        return None
+        assert False, token
 
     @classmethod
     def extract_dict(cls, tokeniter):
@@ -571,8 +572,8 @@ def extract_series_data(html_with_js):
     # Fetch the "series" dict key with a list of elements ("[").
     m = re.search(r'\sseries\s*:\s*\[', html_with_js, re.DOTALL)
     # Start the parsing at the "[".
-    qdjs = QuickAndDirtyJavaScriptParser()
-    series, leftovers = qdjs.parse(html_with_js, start=(m.end() - 1))
+    series, leftovers = QuickAndDirtyJavaScriptParser.parse(
+        html_with_js, start=(m.end() - 1))
     # Ignore the leftover tokens.. there will be HTML as well :)
     expected_names = [
         'Room temperature', 'Room setpoint', 'Outside temperature',
@@ -591,9 +592,9 @@ def main():
     series = extract_series_data(fetch_cached_graph_html())
     print(series[0]['name'])
     for idx, dt in enumerate(series[0]['data']):
-        print(dt)
         if idx == 24:
             break
+        print(dt)
 
 
 if __name__ == '__main__':
