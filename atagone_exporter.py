@@ -5,7 +5,27 @@ Get logging data from your ATAG One
 
 Usage::
 
+    $ python3 atagone_exporter.py
+    Room temperature
+    ['Date.UTC(2020, 10, 27, 0, 0)', 20.0]
+    ['Date.UTC(2020, 10, 27, 1, 0)', 19.5]
+    ['Date.UTC(2020, 10, 27, 2, 0)', 19.4]
+    ...
 
+    $ python3 atagone_exporter.py unittest
+    ......
+    Ran 6 tests in 0.001s
+
+This is work in progress. The goal is to scrape various logging items
+from the portal and store them in prometheus. The hard part
+(fetching/decoding the log items) has been completed with the
+QuickAndDirtyJavaScriptParser found below.
+
+TODO:
+- Add license, year, docs, copyright
+- Extract values from series in usable fashion
+- Figure out how we want to export this to prometheus
+- Auto-cleanup cached files once we have the data
 """
 import base64
 import json
