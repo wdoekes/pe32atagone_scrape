@@ -33,6 +33,7 @@ import json
 import os
 import re
 import sys
+import time
 from collections import OrderedDict
 from datetime import datetime
 from unittest import TestCase, main as unittest_main
@@ -436,8 +437,8 @@ def load_config_yaml():
         config['login']['Password'] = base64.b64decode(
             config['login']['Password'])
     except Exception as e:
-        print(e)
-        print('PROBLEM SOURCE:', config)
+        print(e, file=sys.stderr)
+        print('PROBLEM SOURCE:', config, file=sys.stderr)
         raise
     return config
 
@@ -471,13 +472,14 @@ def device_id_from_cookies(cookies):
         if not device_id or not re.match('^[0-9_-]+$', device_id):
             raise ValueError()
     except Exception as e:
-        print(e)
-        print('PROBLEM SOURCE:', cookies)
+        print(e, file=sys.stderr)
+        print('PROBLEM SOURCE:', cookies, file=sys.stderr)
         raise
     return device_id
 
 
 def login(sess, config):
+    print('Starting login (no existing session?)', file=sys.stderr)
     debug = []
     try:
         login_url = '{}/Account/Login'.format(BASE_URL)
@@ -523,9 +525,9 @@ def login(sess, config):
         assert cookie_device_id == page_device_id, (
             cookie_device_id, page_device_id)
     except Exception as e:
-        print(e)
+        print(e, file=sys.stderr)
         for line in debug:
-            print('DEBUG', line)
+            print('DEBUG', line, file=sys.stderr)
         raise
     finally:
         store_session(sess)
@@ -554,8 +556,13 @@ def fetch_graph_html():
     return resp.text
 
 
-def fetch_cached_graph_html():
+def fetch_cached_graph_html(clear_cache=False):
     """
+    Return cached graph html.
+
+    The clear_cache is a hack so we flush the cache manually, while
+    keeping the caching method internal to this function.
+
     <html>...<script...>
     ...
     series: [{
@@ -568,6 +575,8 @@ def fetch_cached_graph_html():
     """
     cache_file = os.path.join(SPOOLDIR, 'graph.js.html')
     try:
+        if clear_cache:
+            raise FileNotFoundError()  # pretend it wasn't there
         with open(cache_file) as fp:
             text = fp.read()
         if '<script' not in text:
@@ -649,6 +658,67 @@ def extract_series_data(html_with_js):
     return dict((i.identifier, i) for i in datas)
 
 
+class SeriesGetter:
+    """
+    FIXME: This needs a better name.
+    """
+    def __init__(self):
+        self.series = []
+        self.time = None
+        self.refresh()
+
+    def refresh(self):
+        print('Requesting fresh data', file=sys.stderr)
+        fresh_data = fetch_cached_graph_html(clear_cache=True)
+        self.series = extract_series_data(fresh_data)
+        self.time = time.time()
+
+    def get_last(self, identifier):
+        # For now, the data is aggregated per hour. So it would make
+        # sense to only get a new one after the hour has passed.
+        # (time//3600?)
+        if (time.time() - 900) > self.time:
+            self.refresh()
+
+        return self.series[identifier].get_last_value()
+
+
+def prometheus():
+    from prometheus_client import Gauge, start_http_server
+
+    temp_gauge = Gauge(
+        'temperature', 'Room, outside, heating temperatures (in C)', ['what'])
+    heat_gauge = Gauge(
+        'heating', 'Heating of room or water (in percentage)', ['what'])
+    press_gauge = Gauge(
+        'pressure', 'Central heating water pressure (in Bar)', ['what'])
+
+    getter = SeriesGetter()
+
+    temp_gauge.labels(what='room').set_function((
+        lambda: getter.get_last('room temperature')))
+    temp_gauge.labels(what='room-target').set_function((
+        lambda: getter.get_last('room target temperature')))
+    temp_gauge.labels(what='outside').set_function((
+        lambda: getter.get_last('outside temperature')))
+    temp_gauge.labels(what='boiler-room').set_function((
+        lambda: getter.get_last('room heating temperature')))
+    temp_gauge.labels(what='boiler-water').set_function((
+        lambda: getter.get_last('water heating temperature')))
+
+    heat_gauge.labels(what='boiler-room').set_function((
+        lambda: getter.get_last('room heating active')))
+    heat_gauge.labels(what='boiler-water').set_function((
+        lambda: getter.get_last('water heating active')))
+
+    press_gauge.labels(what='boiler').set_function((
+        lambda: getter.get_last('room heating pressure')))
+
+    start_http_server(9002)
+    while True:
+        time.sleep(60)
+
+
 def main():
     series = extract_series_data(fetch_cached_graph_html())
     for dt, value in series['room temperature']:
@@ -659,6 +729,8 @@ if __name__ == '__main__':
     if sys.argv[1:] == ['unittest']:
         sys.argv.pop()
         unittest_main()
+    elif sys.argv[1:] == ['prometheus']:
+        prometheus()
     elif sys.argv[1:] == []:
         main()
     else:
