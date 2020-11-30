@@ -38,6 +38,7 @@ from collections import OrderedDict
 from datetime import datetime
 from unittest import TestCase, main as unittest_main
 
+import psycopg2
 import pytz
 import requests
 import yaml
@@ -422,24 +423,44 @@ class QuickAndDirtyJavaScriptParserTextCase(TestCase):
 
 def load_config_yaml():
     """
-    Load config.yaml; it should look like:
+    Load config.yaml.
 
-    login:
-      Email: foo@bar.net
-      Password: BASE64_ENCODED_PASSWORD
+    For ATAG One login, it requires:
+
+      login:
+        Email: foo@bar.net
+        Password: BASE64_ENCODED_PASSWORD
+
+    For push to Postgres/Timescale, also:
+
+      database:
+        dsn:
+          host: 127.0.0.1
+          user: dbuser
+          dbname: database
+          password: BASE64_ENCODED_PASSWORD
     """
     config = {}
     try:
         with open(CONFIG) as fp:
             config = yaml.safe_load(fp.read())
+
+        # Mandatory.
         assert config.get('login', {}).get('Email')
         assert config.get('login', {}).get('Password')
         config['login']['Password'] = base64.b64decode(
-            config['login']['Password'])
+            config['login']['Password']).decode('ascii')
     except Exception as e:
         print(e, file=sys.stderr)
         print('PROBLEM SOURCE:', config, file=sys.stderr)
         raise
+
+    # Base64 decode database.dsn.password.
+    db_password = config.get('database', {}).get('dsn', {}).get('password')
+    if db_password:
+        config['database']['dsn']['password'] = base64.b64decode(
+            db_password).decode('ascii')
+
     return config
 
 
@@ -719,16 +740,80 @@ def prometheus():
         time.sleep(60)
 
 
+def insert_latest_into_db():
+    """
+    Run once per hour.
+    """
+    config = load_config_yaml()
+    conn = psycopg2.connect(**config['database']['dsn'])
+    series = extract_series_data(fetch_cached_graph_html(clear_cache=True))
+    identifier_to_label_id = {
+        'room temperature': 1,
+        'room target temperature': 2,
+        'outside temperature': 3,
+        'room heating temperature': 4,
+        'water heating temperature': 5,
+    }
+    for identifier, label_id in identifier_to_label_id.items():
+        dt, value = series[identifier].values[-2]  # only insert next to last
+        query = (
+            f"INSERT INTO temperature (time, location_id, value) VALUES "
+            f"('{dt}'::timestamptz, {label_id}, {value});")
+        with conn:
+            with conn.cursor() as cursor:
+                #try:
+                #except psycopg2.IntegrityError:
+                cursor.execute(query)
+
+    identifier_to_label_id = {
+        'room heating active': 4,
+        'water heating active': 5,
+    }
+    for identifier, label_id in identifier_to_label_id.items():
+        dt, value = series[identifier].values[-2]  # only insert next to last
+        query = (
+            f"INSERT INTO active (time, location_id, value) VALUES "
+            f"('{dt}'::timestamptz, {label_id}, {value});")
+        with conn:
+            with conn.cursor() as cursor:
+                #try:
+                #except psycopg2.IntegrityError:
+                cursor.execute(query)
+
+    identifier_to_label_id = {
+        'room heating pressure': 4,
+    }
+    for identifier, label_id in identifier_to_label_id.items():
+        dt, value = series[identifier].values[-2]  # only insert next to last
+        query = (
+            f"INSERT INTO pressure (time, location_id, value) VALUES "
+            f"('{dt}'::timestamptz, {label_id}, {value});")
+        with conn:
+            with conn.cursor() as cursor:
+                #try:
+                #except psycopg2.IntegrityError:
+                cursor.execute(query)
+
+
 def main():
     series = extract_series_data(fetch_cached_graph_html())
-    for dt, value in series['room temperature']:
-        print(dt, value)
+    identifier_to_label_id = {
+        'room heating active': 4,
+        'water heating active': 5,
+    }
+    for identifier, label_id in identifier_to_label_id.items():
+        for dt, value in series[identifier]:
+            print(
+                f"INSERT INTO active (time, location_id, value) VALUES "
+                f"('{dt}'::timestamptz, {label_id}, {value});")
 
 
 if __name__ == '__main__':
     if sys.argv[1:] == ['unittest']:
         sys.argv.pop()
         unittest_main()
+    elif sys.argv[1:] == ['insert']:
+        insert_latest_into_db()
     elif sys.argv[1:] == ['prometheus']:
         prometheus()
     elif sys.argv[1:] == []:
