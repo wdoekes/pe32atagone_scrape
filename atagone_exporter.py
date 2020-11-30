@@ -257,7 +257,7 @@ class QuickAndDirtyJavaScriptParser:
         }
         re_identifier = re.compile(
             r'(?s)^[A-Za-z_][A-Za-z0-9_]*(\s*[.]\s*[A-Za-z_][A-Za-z0-9_]*)*')
-        re_number = re.compile(r'(?s)^[0-9]+([.][0-9]+)?|^[.][0-9]+')
+        re_number = re.compile(r'(?s)^-?[0-9]+([.][0-9]+)?|^-?[.][0-9]+')
         re_string = re.compile(r'(?s)^\'([^\']|\\\\)*\'|^"([^"]|\\\\)*"')
         test = set_and_test_idiom()
 
@@ -396,6 +396,14 @@ class QuickAndDirtyJavaScriptParserTextCase(TestCase):
         with self.assertRaises(StopIteration):
             next(leftovers)
         self.assertEqual(element, [1, [2]])
+
+    def test_also_negative_numbers(self):
+        element, leftovers = QuickAndDirtyJavaScriptParser.parse('-1')
+        self.assertEqual(element, -1)
+        element, leftovers = QuickAndDirtyJavaScriptParser.parse('-.1')
+        self.assertEqual(element, -0.1)
+        element, leftovers = QuickAndDirtyJavaScriptParser.parse('-0.1')
+        self.assertEqual(element, -0.1)
 
     def test_js_function(self):
         JS_FUNCTION = QuickAndDirtyJavaScriptParser.JS_FUNCTION
