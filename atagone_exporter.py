@@ -34,13 +34,16 @@ import os
 import re
 import sys
 from collections import OrderedDict
+from datetime import datetime
 from unittest import TestCase, main as unittest_main
 
+import pytz
 import requests
 import yaml
 
 BINDIR = os.path.dirname(__file__)
 CONFDIR = SPOOLDIR = BINDIR
+TIMEZONE = pytz.timezone('Europe/Amsterdam')
 
 # config.yaml, to configure ATAG One API credentials
 # > login:
@@ -576,13 +579,63 @@ def fetch_cached_graph_html():
     return text
 
 
+class AtagOnePortalGraphData:
+    NAME_TO_IDENTIFIER = {
+        'Room temperature': 'room temperature',
+        'Room setpoint': 'room target temperature',
+        'Outside temperature': 'outside temperature',
+        'Central heating temperature': 'room heating temperature',
+        'Hot water temperature': 'water heating temperature',
+        'Boiler heating time for CH': 'room heating active',
+        'Boiler heating time for hot water': 'water heating active',
+        'Central heating water pressure': 'room heating pressure',
+    }
+
+    @classmethod
+    def from_series_entry(cls, entry):
+        identifier = cls.NAME_TO_IDENTIFIER[entry['name']]
+        return cls(identifier=identifier, data=entry['data'])
+
+    def __init__(self, identifier, data):
+        self.identifier = identifier
+        values = []
+        dt0 = None
+        for row in data:
+            assert (
+                len(row) == 2 and row[0].name == 'Date.UTC' and
+                len(row[0].args) == 5 and
+                isinstance(row[1], (int, float))), row
+            a = row[0].args
+            # It's not actually Date.UTC, even though it pretends it is.
+            # Also: the JS date starts with month 0. And we add 30
+            # minutes, because it's an average over the entire hour.
+            assert a[4] == 0, row
+            naive_dt = datetime(a[0], a[1] + 1, a[2], a[3], a[4] + 30)
+            local_dt = TIMEZONE.localize(naive_dt, is_dst=None)
+            utc_dt = local_dt.astimezone(pytz.utc)
+            # Check time order nad add.
+            assert dt0 is None or (utc_dt - dt0).total_seconds() == 3600, (
+                dt0, utc_dt)  # sorted AND hour-offsets
+            values.append((utc_dt, row[1]))  # date, value
+            dt0 = utc_dt
+        self.values = values
+
+    def get_last_value(self):
+        return self.values[-1][1]  # last element; value
+
+    def __iter__(self):
+        return iter(self.values)
+
+
 def extract_series_data(html_with_js):
     # Fetch the "series" dict key with a list of elements ("[").
     m = re.search(r'\sseries\s*:\s*\[', html_with_js, re.DOTALL)
     # Start the parsing at the "[".
     series, leftovers = QuickAndDirtyJavaScriptParser.parse(
         html_with_js, start=(m.end() - 1))
+
     # Ignore the leftover tokens.. there will be HTML as well :)
+    # Check that we got exactly the values we wanted.
     expected_names = [
         'Room temperature', 'Room setpoint', 'Outside temperature',
         'Central heating temperature', 'Hot water temperature',
@@ -590,19 +643,16 @@ def extract_series_data(html_with_js):
         'Central heating water pressure']
     received_names = [i['name'] for i in series]
     assert expected_names == received_names, (expected_names, received_names)
-    assert [i['data'] for i in series], series
-    assert len(series[0]['data'][0]) == 2, series[0]['data'][0]
-    assert series[0]['data'][0][0].name == 'Date.UTC', series[0]['data'][0]
-    return series
+
+    # Convert to something usable.
+    datas = [AtagOnePortalGraphData.from_series_entry(i) for i in series]
+    return dict((i.identifier, i) for i in datas)
 
 
 def main():
     series = extract_series_data(fetch_cached_graph_html())
-    print(series[0]['name'])
-    for idx, dt in enumerate(series[0]['data']):
-        if idx == 24:
-            break
-        print(dt)
+    for dt, value in series['room temperature']:
+        print(dt, value)
 
 
 if __name__ == '__main__':
