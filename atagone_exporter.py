@@ -26,6 +26,8 @@ TODO:
 - Add logo ref and mention that we're not affiliated
 - Extract values from series in usable fashion
 - Figure out how we want to export this to prometheus
+- Document all possible ways to call this.
+- Remove duplicate code. And add tests for more content.
 - Auto-cleanup cached files once we have the data
 """
 import base64
@@ -554,6 +556,29 @@ def login(sess, config):
         store_session(sess)
 
 
+def fetch_diagnostics_html():
+    sess = restore_session()
+    device_id = None
+    if sess.cookies:
+        device_id = device_id_from_cookies(sess.cookies)
+        log_url = f'{BASE_URL}/Device/LatestReport?deviceId={device_id}'
+        resp = sess.get(log_url)
+        if (resp.status_code != 200 or
+                'Latest report time' not in resp.text):
+            device_id = None
+            sess.cookies.clear()  # wipe stale cookies
+    if device_id is None:
+        login(sess, load_config_yaml())
+        device_id = device_id_from_cookies(sess.cookies)
+        log_url = f'{BASE_URL}/Device/LatestReport?deviceId={device_id}'
+        resp = sess.get(log_url)
+        if (resp.status_code != 200 or
+                'Latest report time' not in resp.text):
+            raise ValueError((resp, resp.text))
+    store_session(sess)
+    return resp.text
+
+
 def fetch_graph_html():
     sess = restore_session()
     device_id = None
@@ -575,6 +600,35 @@ def fetch_graph_html():
             raise ValueError((resp, resp.text))
     store_session(sess)
     return resp.text
+
+
+def fetch_cached_diagnostics_html(clear_cache=False):
+    """
+    Return cached diagnostics html.
+
+    The clear_cache is a hack so we flush the cache manually, while
+    keeping the caching method internal to this function.
+
+    <legend>DIAGNOSTICS</legend>
+    <div class="form-group no-border-top">
+      <label class="col-xs-6 control-label">Latest report time</label>
+      <div class="col-xs-6">
+        <p class="form-control-static">2020-11-30 22:19:22</p>
+    ...
+    """
+    cache_file = os.path.join(SPOOLDIR, 'diagnostics.html')
+    try:
+        if clear_cache:
+            raise FileNotFoundError()  # pretend it wasn't there
+        with open(cache_file) as fp:
+            text = fp.read()
+        if 'Latest report time' not in text:
+            raise ValueError()
+    except (FileNotFoundError, ValueError):
+        text = fetch_diagnostics_html()
+        with open(cache_file, 'w') as fp:
+            fp.write(text)
+    return text
 
 
 def fetch_cached_graph_html(clear_cache=False):
@@ -610,6 +664,8 @@ def fetch_cached_graph_html(clear_cache=False):
 
 
 class AtagOnePortalGraphData:
+    # FIXME: these names/labels may need some work: use camelCase
+    # instead? like the JS diagnostics?
     NAME_TO_IDENTIFIER = {
         'Room temperature': 'room temperature',
         'Room setpoint': 'room target temperature',
@@ -667,6 +723,7 @@ def extract_series_data(html_with_js):
     # Ignore the leftover tokens.. there will be HTML as well :)
     # Check that we got exactly the values we wanted.
     expected_names = [
+        # FIXME: this is duplicate code, see AtagOnePortalGraphData
         'Room temperature', 'Room setpoint', 'Outside temperature',
         'Central heating temperature', 'Hot water temperature',
         'Boiler heating time for CH', 'Boiler heating time for hot water',
@@ -675,6 +732,8 @@ def extract_series_data(html_with_js):
     assert expected_names == received_names, (expected_names, received_names)
 
     # Convert to something usable.
+    # FIXME: this should not be a dict/list, but a full fledged class,
+    # which also allows to_json().
     datas = [AtagOnePortalGraphData.from_series_entry(i) for i in series]
     return dict((i.identifier, i) for i in datas)
 
@@ -698,6 +757,13 @@ class SeriesGetter:
         # For now, the data is aggregated per hour. So it would make
         # sense to only get a new one after the hour has passed.
         # (time//3600?)
+        # FIXME: this is actually buggy, as the last value is an
+        # average that keeps changing. By returning this, we're
+        # creating a sawtooth where the first minutes of the hour are
+        # always more extreme.
+        # FIXME: should do the hour-check instead..
+        # but instead, we'll want none of the graph stuff here, but the
+        # instant-stuff from latestReportTime/diagnostics instead.
         if (time.time() - 900) > self.time:
             self.refresh()
 
@@ -761,9 +827,7 @@ def insert_latest_into_db():
             f"('{dt}'::timestamptz, {label_id}, {value});")
         with conn:
             with conn.cursor() as cursor:
-                #try:
-                #except psycopg2.IntegrityError:
-                cursor.execute(query)
+                cursor.execute(query)  # psycopg2.IntegrityError
 
     identifier_to_label_id = {
         'room heating active': 4,
@@ -776,9 +840,7 @@ def insert_latest_into_db():
             f"('{dt}'::timestamptz, {label_id}, {value});")
         with conn:
             with conn.cursor() as cursor:
-                #try:
-                #except psycopg2.IntegrityError:
-                cursor.execute(query)
+                cursor.execute(query)  # psycopg2.IntegrityError
 
     identifier_to_label_id = {
         'room heating pressure': 4,
@@ -790,22 +852,30 @@ def insert_latest_into_db():
             f"('{dt}'::timestamptz, {label_id}, {value});")
         with conn:
             with conn.cursor() as cursor:
-                #try:
-                #except psycopg2.IntegrityError:
-                cursor.execute(query)
+                cursor.execute(query)  # psycopg2.IntegrityError
 
 
 def main():
-    series = extract_series_data(fetch_cached_graph_html())
-    identifier_to_label_id = {
-        'room heating active': 4,
-        'water heating active': 5,
-    }
-    for identifier, label_id in identifier_to_label_id.items():
-        for dt, value in series[identifier]:
-            print(
-                f"INSERT INTO active (time, location_id, value) VALUES "
-                f"('{dt}'::timestamptz, {label_id}, {value});")
+    text = fetch_cached_diagnostics_html()
+    # {
+    # deviceId: "6808-1401-3109_15-30-001-123",
+    # latestReportTime: "2020-11-30 22:31:39",
+    # deviceIP: "10.0.100.50",
+    # burningHours: 283.91,
+    # roomTemperature: 19.9,
+    # outsideTemperature: 4.4,
+    # dhwSetpoint: 60.0,
+    # dhwWaterTemperature: 46.8,
+    # chSetpoint: 42.3,
+    # chWaterTemperature: 46.6,
+    # chWaterPressure: 1.6,
+    # chReturnTemperature: 40.3,
+    # targetTemperature: 20.0,
+    # dhwWaterTemp: 46.8,
+    # dhwWaterPres: 0.0,
+    # ...
+    # }
+    print(text)
 
 
 if __name__ == '__main__':
