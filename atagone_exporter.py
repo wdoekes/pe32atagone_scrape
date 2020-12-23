@@ -32,6 +32,7 @@ TODO:
 """
 import base64
 import json
+import math  # for nan (NaN) and inf (Infinity)
 import os
 import re
 import sys
@@ -285,8 +286,13 @@ class QuickAndDirtyJavaScriptParser:
                 pos += test.v.end()
                 yield num
             elif test(re_identifier.match(text[pos:])):
-                ident = cls.JS_IDENTIFIER(
-                    text[(pos + test.v.start()):(pos + test.v.end())])
+                ident_name = text[(pos + test.v.start()):(pos + test.v.end())]
+                if ident_name == 'Infinity':
+                    ident = math.inf
+                elif ident_name == 'NaN':
+                    ident = math.nan
+                else:
+                    ident = cls.JS_IDENTIFIER(ident_name)
                 pos += test.v.end()
                 yield ident
             elif test(re_string.match(text[pos:])):
@@ -421,6 +427,56 @@ class QuickAndDirtyJavaScriptParserTextCase(TestCase):
         self.assertEqual(repr(func), "\"Date.UTC(1, 2, 'three')\"")
         self.assertEqual(
             json.dumps({'x': func}), '{"x": "Date.UTC(1, 2, \'three\')"}')
+
+    def test_nan_infinity(self):
+        source = '''
+        {
+          name: 'Boiler heating time for hot water',
+          tooltip: { valueSuffix: "%", },
+          yAxis: 1,
+          type: 'column',
+          step: 'right',
+          data: [
+            [Date.UTC(2020,11,19,11,0),0],[Date.UTC(2020,11,19,12,0),0],
+            [Date.UTC(2020,11,19,13,0),0],[Date.UTC(2020,11,19,14,0),0],
+            [Date.UTC(2020,11,19,15,0),0],[Date.UTC(2020,11,19,16,0),0],
+            [Date.UTC(2020,11,19,17,0),0],[Date.UTC(2020,11,19,18,0),0],
+            [Date.UTC(2020,11,19,19,0),0],[Date.UTC(2020,11,19,20,0),4],
+            [Date.UTC(2020,11,19,21,0),0],[Date.UTC(2020,11,19,22,0),0],
+            [Date.UTC(2020,11,19,23,0),0],[Date.UTC(2020,11,20,0,0),0],
+            [Date.UTC(2020,11,20,1,0),0],[Date.UTC(2020,11,20,2,0),0],
+            [Date.UTC(2020,11,20,3,0),0],[Date.UTC(2020,11,20,4,0),0],
+            [Date.UTC(2020,11,20,5,0),0],[Date.UTC(2020,11,20,6,0),0],
+            [Date.UTC(2020,11,20,7,0),0],[Date.UTC(2020,11,20,8,0),0],
+            [Date.UTC(2020,11,20,9,0),0],[Date.UTC(2020,11,20,10,0),0],
+            [Date.UTC(2020,11,20,11,0),0],[Date.UTC(2020,11,20,12,0),0],
+            [Date.UTC(2020,11,20,13,0),0],[Date.UTC(2020,11,20,14,0),25],
+            [Date.UTC(2020,11,20,15,0),17.8571428571429],
+              [Date.UTC(2020,11,20,16,0),26.9230769230769],
+            [Date.UTC(2020,11,20,17,0),3.33333333333333],
+              [Date.UTC(2020,11,20,18,0),0],
+            [Date.UTC(2020,11,20,19,0),0],
+              [Date.UTC(2020,11,20,20,0),6.89655172413793],
+            [Date.UTC(2020,11,20,21,0),0],[Date.UTC(2020,11,20,22,0),0],
+            [Date.UTC(2020,11,20,23,0),0],[Date.UTC(2020,11,21,0,0),0],
+            [Date.UTC(2020,11,21,1,0),0],[Date.UTC(2020,11,21,2,0),NaN],
+            [Date.UTC(2020,11,21,3,0),NaN],[Date.UTC(2020,11,21,4,0),NaN],
+            [Date.UTC(2020,11,21,5,0),NaN],
+              [Date.UTC(2020,11,21,6,0),Infinity],
+            [Date.UTC(2020,11,21,7,0),NaN],[Date.UTC(2020,11,21,8,0),NaN],
+            [Date.UTC(2020,11,21,9,0),0],[Date.UTC(2020,11,21,10,0),0],
+            [Date.UTC(2020,11,21,11,0),0]
+          ]
+        }
+        '''
+        element, leftovers = QuickAndDirtyJavaScriptParser.parse(source)
+        data = element['data']
+        self.assertEqual(
+            data[-16], ['Date.UTC(2020, 11, 20, 20, 0)', 6.89655172413793])
+        self.assertEqual(
+            data[-9], ['Date.UTC(2020, 11, 21, 3, 0)', math.nan])
+        self.assertEqual(
+            data[-6], ['Date.UTC(2020, 11, 21, 6, 0)', math.inf])
 
 
 def load_config_yaml():
