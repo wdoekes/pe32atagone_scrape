@@ -886,42 +886,26 @@ def insert_latest_into_db():
     config = load_config_yaml()
     conn = psycopg2.connect(**config['database']['dsn'])
     series = extract_series_data(fetch_cached_graph_html(clear_cache=True))
-    identifier_to_label_id = {
-        'room temperature': 1,
-        'room target temperature': 2,
-        'outside temperature': 3,
-        'room heating temperature': 4,
-        'water heating temperature': 5,
-    }
-    for identifier, label_id in identifier_to_label_id.items():
-        for idx in range(-10, -1):  # insert all but the last one
-            dt, value = series[identifier].values[idx]
-            query = (
-                f"INSERT INTO temperature (time, location_id, value) VALUES "
-                f"('{dt}'::timestamptz, {label_id}, {value});")
-            execute_or_ignore(conn, query)
+
+    temperature_tbl = 'temperature'
+    active_tbl = 'active'
+    pressure_tbl = 'pressure'
 
     identifier_to_label_id = {
-        'room heating active': 4,
-        'water heating active': 5,
+        'room temperature': (temperature_tbl, 1),
+        'room target temperature': (temperature_tbl, 2),
+        'outside temperature': (temperature_tbl, 3),
+        'room heating temperature': (temperature_tbl, 4),
+        'water heating temperature': (temperature_tbl, 5),
+        'room heating active': (active_tbl, 4),
+        'water heating active': (active_tbl, 5),
+        'room heating pressure': (pressure_tbl, 4),
     }
-    for identifier, label_id in identifier_to_label_id.items():
+    for identifier, (table, label_id) in identifier_to_label_id.items():
         for idx in range(-10, -1):  # insert all but the last one
             dt, value = series[identifier].values[idx]
             query = (
-                f"INSERT INTO active (time, location_id, value) VALUES "
-                f"('{dt}'::timestamptz, {label_id}, {value});")
-            execute_or_ignore(conn, query)
-
-    identifier_to_label_id = {
-        'room heating pressure': 4,
-    }
-    for identifier, label_id in identifier_to_label_id.items():
-        dt, value = series[identifier].values[-2]  # only insert next to last
-        for idx in range(-10, -1):  # insert all but the last one
-            dt, value = series[identifier].values[idx]
-            query = (
-                f"INSERT INTO pressure (time, location_id, value) VALUES "
+                f"INSERT INTO {table} (time, location_id, value) VALUES "
                 f"('{dt}'::timestamptz, {label_id}, {value});")
             execute_or_ignore(conn, query)
 
