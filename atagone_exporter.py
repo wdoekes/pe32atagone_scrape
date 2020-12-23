@@ -37,6 +37,7 @@ import os
 import re
 import sys
 import time
+import warnings
 from collections import OrderedDict
 from datetime import datetime
 from unittest import TestCase, main as unittest_main
@@ -755,9 +756,17 @@ class AtagOnePortalGraphData:
             naive_dt = datetime(a[0], a[1] + 1, a[2], a[3], a[4] + 30)
             local_dt = TIMEZONE.localize(naive_dt, is_dst=None)
             utc_dt = local_dt.astimezone(pytz.utc)
-            # Check time order nad add.
-            assert dt0 is None or (utc_dt - dt0).total_seconds() == 3600, (
-                dt0, utc_dt)  # sorted AND hour-offsets
+            # Check time order and add.
+            if dt0 is None:
+                tdelta = 3600
+            else:
+                tdelta = (utc_dt - dt0).total_seconds()
+            if tdelta == 3600:
+                pass  # sorted and hourly
+            elif tdelta > 0 and (tdelta % 3600) == 0:
+                warnings.warn(f'Missing an hour at {utc_dt} (delta {tdelta})')
+            else:
+                assert False, (dt0, utc_dt, tdelta)  # unsorted or non-hour
             values.append((utc_dt, row[1]))  # date, value
             dt0 = utc_dt
         self.values = values
