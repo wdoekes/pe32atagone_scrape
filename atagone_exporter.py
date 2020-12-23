@@ -875,6 +875,14 @@ def insert_latest_into_db():
     """
     Run once per hour.
     """
+    def execute_or_ignore(c, q):
+        try:
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(query)
+        except psycopg2.IntegrityError:
+            pass
+
     config = load_config_yaml()
     conn = psycopg2.connect(**config['database']['dsn'])
     series = extract_series_data(fetch_cached_graph_html(clear_cache=True))
@@ -886,38 +894,36 @@ def insert_latest_into_db():
         'water heating temperature': 5,
     }
     for identifier, label_id in identifier_to_label_id.items():
-        dt, value = series[identifier].values[-2]  # only insert next to last
-        query = (
-            f"INSERT INTO temperature (time, location_id, value) VALUES "
-            f"('{dt}'::timestamptz, {label_id}, {value});")
-        with conn:
-            with conn.cursor() as cursor:
-                cursor.execute(query)  # psycopg2.IntegrityError
+        for idx in range(-10, -1):  # insert all but the last one
+            dt, value = series[identifier].values[idx]
+            query = (
+                f"INSERT INTO temperature (time, location_id, value) VALUES "
+                f"('{dt}'::timestamptz, {label_id}, {value});")
+            execute_or_ignore(conn, query)
 
     identifier_to_label_id = {
         'room heating active': 4,
         'water heating active': 5,
     }
     for identifier, label_id in identifier_to_label_id.items():
-        dt, value = series[identifier].values[-2]  # only insert next to last
-        query = (
-            f"INSERT INTO active (time, location_id, value) VALUES "
-            f"('{dt}'::timestamptz, {label_id}, {value});")
-        with conn:
-            with conn.cursor() as cursor:
-                cursor.execute(query)  # psycopg2.IntegrityError
+        for idx in range(-10, -1):  # insert all but the last one
+            dt, value = series[identifier].values[idx]
+            query = (
+                f"INSERT INTO active (time, location_id, value) VALUES "
+                f"('{dt}'::timestamptz, {label_id}, {value});")
+            execute_or_ignore(conn, query)
 
     identifier_to_label_id = {
         'room heating pressure': 4,
     }
     for identifier, label_id in identifier_to_label_id.items():
         dt, value = series[identifier].values[-2]  # only insert next to last
-        query = (
-            f"INSERT INTO pressure (time, location_id, value) VALUES "
-            f"('{dt}'::timestamptz, {label_id}, {value});")
-        with conn:
-            with conn.cursor() as cursor:
-                cursor.execute(query)  # psycopg2.IntegrityError
+        for idx in range(-10, -1):  # insert all but the last one
+            dt, value = series[identifier].values[idx]
+            query = (
+                f"INSERT INTO pressure (time, location_id, value) VALUES "
+                f"('{dt}'::timestamptz, {label_id}, {value});")
+            execute_or_ignore(conn, query)
 
 
 def main():
