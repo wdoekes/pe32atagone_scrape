@@ -2,4 +2,5 @@ __pycache__
 
 /config.yaml
 /cookies.js
+/diagnostics.html
 /graph.js.html

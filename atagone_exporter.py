@@ -5,16 +5,37 @@ Get logging data from your ATAG One
 
 Usage::
 
-    $ python3 atagone_exporter.py
-    Room temperature
-    ['Date.UTC(2020, 10, 27, 0, 0)', 20.0]
-    ['Date.UTC(2020, 10, 27, 1, 0)', 19.5]
-    ['Date.UTC(2020, 10, 27, 2, 0)', 19.4]
-    ...
+    $ cat > config.yaml < EOF
+    login:
+      Email: my.email@login.com
+      Password: cGFzc3dvcmQK
+    database:
+      dsn:
+        host: dbhost
+        user: dbuser
+        database: dbname
+        password: cGFzc3dvcmQK
+    deviceId: 6808-....-...._..-..-...-...
+    EOF
 
     $ python3 atagone_exporter.py unittest
     ......
     Ran 6 tests in 0.001s
+
+    $ python3 atagone_exporter.py graph
+    [(datetime.datetime(2020, 11, 28, 20, 0, tzinfo=<UTC>), 20.1),
+     (datetime.datetime(2020, 11, 28, 21, 0, tzinfo=<UTC>), 19.7),
+     (datetime.datetime(2020, 11, 28, 22, 0, tzinfo=<UTC>), 19.5),
+    ...
+
+    $ python3 atagone_exporter.py diagnostics
+    {'averageOutsideTemperature': 6.9,
+     'boilerHeatingFor': '',
+     'burningHours': 1818.1,
+    ...
+
+    $ python3 atagone_exporter.py insert
+    (insert stuff into db)
 
 This is work in progress. The goal is to scrape various logging items
 from the portal and store them in a database. The hard part
@@ -24,11 +45,14 @@ QuickAndDirtyJavaScriptParser found below.
 TODO:
 - Add license, year, docs, copyright
 - Add logo ref and mention that we're not affiliated
-- Extract values from series in usable fashion
-- Figure out how we want to export this to prometheus
+- Extract values from series in usable fashion.
 - Document all possible ways to call this.
 - Remove duplicate code. And add tests for more content.
 - Auto-cleanup cached files once we have the data
+TODO2:
+- Read https://github.com/kozmoz/atag-one-api/blob/
+  5c01e3216003e5f09d74d4dcc128bdc8880c7441/src/main/java/org/juurlink/
+  atagone/AtagOneRemoteConnector.java#L109-L132
 """
 import base64
 import json
@@ -39,13 +63,17 @@ import sys
 import time
 import warnings
 from collections import OrderedDict
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest import TestCase, main as unittest_main
 
-import psycopg2
 import pytz
 import requests
 import yaml
+
+try:
+    import psycopg2
+except ImportError:
+    psycopg2 = None
 
 # Temp fix while intermediates on Atag portal are broken. Specify the
 # intermediate + root ourself.
@@ -748,6 +776,7 @@ class AtagOnePortalGraphData:
         self.identifier = identifier
         values = []
         dt0 = None
+        dst_next = None
         for row in data:
             assert (
                 len(row) == 2 and row[0].name == 'Date.UTC' and
@@ -755,11 +784,34 @@ class AtagOnePortalGraphData:
                 isinstance(row[1], (int, float))), row
             a = row[0].args
             # It's not actually Date.UTC, even though it pretends it is.
-            # Also: the JS date starts with month 0. And we add 30
-            # minutes, because it's an average over the entire hour.
-            assert a[4] == 0, row
-            naive_dt = datetime(a[0], a[1] + 1, a[2], a[3], a[4] + 30)
-            local_dt = TIMEZONE.localize(naive_dt, is_dst=None)
+            # Also: the JS date starts with month 0.
+            # We add 1 hour, now 10:00 means "the average between 09:00
+            # and 10:00". (This is wrong for fixed times like the room
+            # setpoint, but for the other averages it is fine.)
+            # FIXME: we should move this parsing to a optional
+            # callback-handler in the QuickAndDirtyJavaScriptParser.
+            assert 0 <= a[3] <= 23 and a[4] == 0, row
+            naive_dt = (
+                datetime(a[0], a[1] + 1, a[2], a[3], a[4]))
+            # Times during DST change:
+            # ['Date.UTC(2021, 2, 28, 0, 0)', 1.7] (2021, 2, 28, 0, 0)
+            # ['Date.UTC(2021, 2, 28, 1, 0)', 1.7] (2021, 2, 28, 1, 0)
+            # ['Date.UTC(2021, 2, 28, 3, 0)', 1.7] (2021, 2, 28, 3, 0)
+            # definitive proof that it is not UTC, and that we add _one_
+            # hour after converting to UTC because it signifies "the
+            # last time that includes this average"
+            try:
+                local_dt = TIMEZONE.localize(naive_dt, is_dst=None)
+            except pytz.exceptions.AmbiguousTimeError:
+                # Whatever.. this only happens when going backward.
+                # When going forward there is no ambiguity.
+                if dst_next is None:
+                    local_dt = TIMEZONE.localize(naive_dt, is_dst=True)
+                    dst_next = False
+                else:
+                    assert dst_next is False, dst_next
+                    local_dt = TIMEZONE.localize(naive_dt, is_dst=False)
+            local_dt += timedelta(hours=1)
             utc_dt = local_dt.astimezone(pytz.utc)
             # Check time order and add.
             if dt0 is None:
@@ -808,6 +860,50 @@ def extract_series_data(html_with_js):
     return dict((i.identifier, i) for i in datas)
 
 
+def extract_diagnostics(html):
+    def name_to_camel(s):
+        parts = s.strip().lower().split()
+        parts[1:] = [i.capitalize() for i in parts[1:]]
+        return ''.join(parts)
+
+    def clean_value(s):
+        s = s.strip()
+        if s.endswith('&#176;'):  # DEGREE (CELCIUS)
+            s = s[0:-6]
+        if all(i.isdigit() for i in s.split('.', 1)):
+            s = float(s)
+        elif s.startswith('20') and len(s) == 19:
+            # '2021-04-05 18:16:15' for latestReportTime (in always-CET(!))
+            dt, tm = s.split(' ')
+            dt = [int(i) for i in dt.split('-')]
+            tm = [int(i) for i in tm.split(':')]
+            # # time is off by a lot: '2021-04-05 18:16:15' found at 18:00 CEST
+            # cet_dt = (
+            #     datetime(*(dt + tm), tzinfo=pytz.utc) - timedelta(hours=3))
+            naive_dt = datetime(*(dt + tm), tzinfo=None)
+            local_dt = TIMEZONE.localize(naive_dt, is_dst=None)
+            utc_dt = local_dt.astimezone(pytz.utc)
+            # # Date ~is~ was off by 12 minutes or so...
+            # # "2021-04-06 12:04:59" is in fact "2021-04-06 11:53:19"
+            # # (or earlier)
+            # utc_dt -= timedelta(minutes=12)
+            # At "2021-04-06 16:26:21" or so, this was fixed. And time
+            # was displayed in CEST.
+            s = utc_dt
+        return s
+
+    pat = re.compile(
+        r'<label[^>]*>([^<]*)<\/label>(\s*|(?!<label)<[^>]*>)*([^<]+)')
+    res = pat.findall(html, re.DOTALL)
+    d = {}
+    for name, filler, value in res:
+        key = name_to_camel(name)
+        assert key not in d, (key, d)
+        d[key] = clean_value(value)
+
+    return d
+
+
 class SeriesGetter:
     """
     FIXME: This needs a better name.
@@ -840,45 +936,51 @@ class SeriesGetter:
         return self.series[identifier].get_last_value()
 
 
-def prometheus():
-    from prometheus_client import Gauge, start_http_server
-
-    temp_gauge = Gauge(
-        'temperature', 'Room, outside, heating temperatures (in C)', ['what'])
-    heat_gauge = Gauge(
-        'heating', 'Heating of room or water (in percentage)', ['what'])
-    press_gauge = Gauge(
-        'pressure', 'Central heating water pressure (in Bar)', ['what'])
-
-    getter = SeriesGetter()
-
-    temp_gauge.labels(what='room').set_function((
-        lambda: getter.get_last('room temperature')))
-    temp_gauge.labels(what='room-target').set_function((
-        lambda: getter.get_last('room target temperature')))
-    temp_gauge.labels(what='outside').set_function((
-        lambda: getter.get_last('outside temperature')))
-    temp_gauge.labels(what='boiler-room').set_function((
-        lambda: getter.get_last('room heating temperature')))
-    temp_gauge.labels(what='boiler-water').set_function((
-        lambda: getter.get_last('water heating temperature')))
-
-    heat_gauge.labels(what='boiler-room').set_function((
-        lambda: getter.get_last('room heating active')))
-    heat_gauge.labels(what='boiler-water').set_function((
-        lambda: getter.get_last('water heating active')))
-
-    press_gauge.labels(what='boiler').set_function((
-        lambda: getter.get_last('room heating pressure')))
-
-    start_http_server(9002)
-    while True:
-        time.sleep(60)
-
-
-def insert_latest_into_db():
+def insert_diagnostics_into_db():
     """
-    Run once per hour.
+    Use diagnostics and insert into DB. Run once per hour.
+    """
+    def execute_or_ignore(c, q):
+        try:
+            with conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(query)
+        except psycopg2.IntegrityError:
+            pass
+
+    config = load_config_yaml()
+    conn = psycopg2.connect(**config['database']['dsn'])
+
+    temperature_tbl = 'temperature'
+    pressure_tbl = 'pressure'
+
+    identifier_to_label_id = {
+        'roomTemperature': (temperature_tbl, 1),
+        # 'room target temperature': (temperature_tbl, 2),
+        'outsideTemperature': (temperature_tbl, 3),
+        'chWaterTemperature': (temperature_tbl, 4),
+        # XXX:'chReturnTemperature': (temperature_tbl, 4),
+        'dhwWaterTemperature': (temperature_tbl, 5),
+        # FIXME?'room heating active': (active_tbl, 4),
+        # FIXME?'water heating active': (active_tbl, 5),
+        'chWaterPressure': (pressure_tbl, 4),
+        # 'dt' ?? 'chSetpoint' ? 'dhwSetpoint' ?
+    }
+    text = fetch_cached_diagnostics_html(clear_cache=True)
+    diag = extract_diagnostics(text)
+
+    for identifier, (table, label_id) in identifier_to_label_id.items():
+        dt = diag['latestReportTime']
+        value = diag[identifier]
+        query = (
+            f"INSERT INTO {table} (time, location_id, value) VALUES "
+            f"('{dt}'::timestamptz, {label_id}, {value});")
+        execute_or_ignore(conn, query)
+
+
+def insert_logging_into_db():
+    """
+    Use stats/graph and insert into DB. Run once per hour.
     """
     def execute_or_ignore(c, q):
         try:
@@ -907,6 +1009,12 @@ def insert_latest_into_db():
         'room heating pressure': (pressure_tbl, 4),
     }
     for identifier, (table, label_id) in identifier_to_label_id.items():
+        if len(series[identifier].values) < 11:
+            print('Unexpected: got only {} values for {}: {}'.format(
+                len(series[identifier].values), identifier,
+                series[identifier].values))
+            continue
+
         for idx in range(-10, -1):  # insert all but the last one
             dt, value = series[identifier].values[idx]
             query = (
@@ -915,38 +1023,46 @@ def insert_latest_into_db():
             execute_or_ignore(conn, query)
 
 
-def main():
+def main_diagnostics():
+    from pprint import pprint
     text = fetch_cached_diagnostics_html()
-    # {
-    # deviceId: "6808-1401-3109_15-30-001-123",
-    # latestReportTime: "2020-11-30 22:31:39",
-    # deviceIP: "10.0.100.50",
-    # burningHours: 283.91,
-    # roomTemperature: 19.9,
-    # outsideTemperature: 4.4,
-    # dhwSetpoint: 60.0,
-    # dhwWaterTemperature: 46.8,
-    # chSetpoint: 42.3,
-    # chWaterTemperature: 46.6,
-    # chWaterPressure: 1.6,
-    # chReturnTemperature: 40.3,
-    # targetTemperature: 20.0,
-    # dhwWaterTemp: 46.8,
-    # dhwWaterPres: 0.0,
-    # ...
-    # }
-    print(text)
+    # print(text)
+    diag = extract_diagnostics(text)
+    # {'averageOutsideTemperature': 0.1,
+    #  'boilerHeatingFor': '', # 'DHW' # 'CH'
+    #  'burningHours': 1068.1,
+    #  'chReturnTemperature': 19.9,
+    #  'chSetpoint': 0.0,
+    #  'chWaterPressure': 1.5,
+    #  'chWaterTemperature': 19.9,
+    #  'dhwSetpoint': 60.0,
+    #  'dhwWaterTemperature': 28.5,
+    #  'dt': 0.0,
+    #  'flameStatus': 'Off', # 'On'
+    #  'latestReportTime': '2020-11-30 22:25:28',
+    #  'outsideTemperature': 6.0,
+    #  'roomTemperature': 19.9}
+    pprint(diag)
+
+
+def main_graph():
+    from pprint import pprint
+    text = fetch_cached_graph_html()
+    # print(text)
+    series = extract_series_data(text)
+    pprint(series['room temperature'].values)
 
 
 if __name__ == '__main__':
     if sys.argv[1:] == ['unittest']:
         sys.argv.pop()
         unittest_main()
+    elif sys.argv[1:] == ['graph']:
+        main_graph()
+    elif sys.argv[1:] == ['diagnostics']:
+        main_diagnostics()
     elif sys.argv[1:] == ['insert']:
-        insert_latest_into_db()
-    elif sys.argv[1:] == ['prometheus']:
-        prometheus()
-    elif sys.argv[1:] == []:
-        main()
+        insert_logging_into_db()
+        # insert_diagnostics_into_db()
     else:
         assert False
