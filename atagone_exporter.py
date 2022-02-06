@@ -17,7 +17,7 @@ Usage::
     Ran 6 tests in 0.001s
 
 This is work in progress. The goal is to scrape various logging items
-from the portal and store them in prometheus. The hard part
+from the portal and store them in a database. The hard part
 (fetching/decoding the log items) has been completed with the
 QuickAndDirtyJavaScriptParser found below.
 
@@ -46,6 +46,11 @@ import psycopg2
 import pytz
 import requests
 import yaml
+
+# Temp fix while intermediates on Atag portal are broken. Specify the
+# intermediate + root ourself.
+CA_BUNDLE = os.path.join(
+    os.path.dirname(__file__), 'portal.atag-one.com.chain')
 
 BINDIR = os.path.dirname(__file__)
 CONFDIR = SPOOLDIR = BINDIR
@@ -564,7 +569,7 @@ def login(sess, config):
     try:
         login_url = '{}/Account/Login'.format(BASE_URL)
         debug.append(f'GET: {login_url!r}')
-        resp = sess.get(login_url)
+        resp = sess.get(login_url, verify=CA_BUNDLE)
         debug.append(f'resp: {resp.status_code!r} {sess.cookies!r}')
         debug.append(f'body: {resp.text!r}')
         assert resp.status_code == 200, resp
@@ -619,7 +624,7 @@ def fetch_diagnostics_html():
     if sess.cookies:
         device_id = device_id_from_cookies(sess.cookies)
         log_url = f'{BASE_URL}/Device/LatestReport?deviceId={device_id}'
-        resp = sess.get(log_url)
+        resp = sess.get(log_url, verify=CA_BUNDLE)
         if (resp.status_code != 200 or
                 'Latest report time' not in resp.text):
             device_id = None
@@ -628,7 +633,7 @@ def fetch_diagnostics_html():
         login(sess, load_config_yaml())
         device_id = device_id_from_cookies(sess.cookies)
         log_url = f'{BASE_URL}/Device/LatestReport?deviceId={device_id}'
-        resp = sess.get(log_url)
+        resp = sess.get(log_url, verify=CA_BUNDLE)
         if (resp.status_code != 200 or
                 'Latest report time' not in resp.text):
             raise ValueError((resp, resp.text))
@@ -642,7 +647,7 @@ def fetch_graph_html():
     if sess.cookies:
         device_id = device_id_from_cookies(sess.cookies)
         log_url = f'{BASE_URL}/Device/GraphTimeSeries?deviceId={device_id}'
-        resp = sess.get(log_url)
+        resp = sess.get(log_url, verify=CA_BUNDLE)
         if (resp.status_code != 200 or
                 'Central heating water pressure' not in resp.text):
             device_id = None
@@ -651,7 +656,7 @@ def fetch_graph_html():
         login(sess, load_config_yaml())
         device_id = device_id_from_cookies(sess.cookies)
         log_url = f'{BASE_URL}/Device/GraphTimeSeries?deviceId={device_id}'
-        resp = sess.get(log_url)
+        resp = sess.get(log_url, verify=CA_BUNDLE)
         if (resp.status_code != 200 or
                 'Central heating water pressure' not in resp.text):
             raise ValueError((resp, resp.text))
