@@ -18,23 +18,23 @@ Usage::
     deviceId: 6808-....-...._..-..-...-...
     EOF
 
-    $ python3 atagone_exporter.py unittest
+    $ python3 pe32atagone_scrape.py unittest
     ......
     Ran 6 tests in 0.001s
 
-    $ python3 atagone_exporter.py graph
+    $ python3 pe32atagone_scrape.py graph
     [(datetime.datetime(2020, 11, 28, 20, 0, tzinfo=<UTC>), 20.1),
      (datetime.datetime(2020, 11, 28, 21, 0, tzinfo=<UTC>), 19.7),
      (datetime.datetime(2020, 11, 28, 22, 0, tzinfo=<UTC>), 19.5),
     ...
 
-    $ python3 atagone_exporter.py diagnostics
+    $ python3 pe32atagone_scrape.py diagnostics
     {'averageOutsideTemperature': 6.9,
      'boilerHeatingFor': '',
      'burningHours': 1818.1,
     ...
 
-    $ python3 atagone_exporter.py insert
+    $ python3 pe32atagone_scrape.py insert
     (insert stuff into db)
 
 This is work in progress. The goal is to scrape various logging items
