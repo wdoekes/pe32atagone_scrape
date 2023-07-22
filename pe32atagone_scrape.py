@@ -92,8 +92,8 @@ TIMEZONE = pytz.timezone('Europe/Amsterdam')
 # >   Email: user@domain.tld
 # >   Password: YmFzZTY0X2VuY29kZWRfcGFzc3dvcmQ=
 CONFIG = os.path.join(CONFDIR, 'config.yaml')
-# cookies.js, for temporary cookie storage
-COOKIE_JAR = os.path.join(SPOOLDIR, 'cookies.js')
+# cookies.json, for temporary cookie storage
+COOKIE_JAR = os.path.join(SPOOLDIR, 'cookies.json')
 BASE_URL = 'https://portal.atag-one.com'
 
 
