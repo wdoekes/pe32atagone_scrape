@@ -1,0 +1,10 @@
+login:
+  Email: my.email@login.com
+  Password: cGFzc3dvcmQK
+database:
+  dsn:
+    host: dbhost
+    user: dbuser
+    database: dbname
+    password: cGFzc3dvcmQK
+deviceId: 6808-....-...._..-..-...-...
