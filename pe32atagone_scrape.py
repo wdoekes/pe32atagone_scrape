@@ -77,8 +77,11 @@ except ImportError:
 
 # Temp fix while intermediates on Atag portal are broken. Specify the
 # intermediate + root ourself.
-CA_BUNDLE = os.path.join(
-    os.path.dirname(__file__), 'portal.atag-one.com.chain')
+if False:
+    SESS_KWARGS = {'verify': os.path.join(
+        os.path.dirname(__file__), 'portal.atag-one.com.chain')}
+else:
+    SESS_KWARGS = {}
 
 BINDIR = os.path.dirname(__file__)
 CONFDIR = SPOOLDIR = BINDIR
@@ -597,7 +600,7 @@ def login(sess, config):
     try:
         login_url = '{}/Account/Login'.format(BASE_URL)
         debug.append(f'GET: {login_url!r}')
-        resp = sess.get(login_url, verify=CA_BUNDLE)
+        resp = sess.get(login_url, **SESS_KWARGS)
         debug.append(f'resp: {resp.status_code!r} {sess.cookies!r}')
         debug.append(f'body: {resp.text!r}')
         assert resp.status_code == 200, resp
@@ -652,7 +655,7 @@ def fetch_diagnostics_html():
     if sess.cookies:
         device_id = device_id_from_cookies(sess.cookies)
         log_url = f'{BASE_URL}/Device/LatestReport?deviceId={device_id}'
-        resp = sess.get(log_url, verify=CA_BUNDLE)
+        resp = sess.get(log_url, **SESS_KWARGS)
         if (resp.status_code != 200 or
                 'Latest report time' not in resp.text):
             device_id = None
@@ -661,7 +664,7 @@ def fetch_diagnostics_html():
         login(sess, load_config_yaml())
         device_id = device_id_from_cookies(sess.cookies)
         log_url = f'{BASE_URL}/Device/LatestReport?deviceId={device_id}'
-        resp = sess.get(log_url, verify=CA_BUNDLE)
+        resp = sess.get(log_url, **SESS_KWARGS)
         if (resp.status_code != 200 or
                 'Latest report time' not in resp.text):
             raise ValueError((resp, resp.text))
@@ -675,7 +678,7 @@ def fetch_graph_html():
     if sess.cookies:
         device_id = device_id_from_cookies(sess.cookies)
         log_url = f'{BASE_URL}/Device/GraphTimeSeries?deviceId={device_id}'
-        resp = sess.get(log_url, verify=CA_BUNDLE)
+        resp = sess.get(log_url, **SESS_KWARGS)
         if (resp.status_code != 200 or
                 'Central heating water pressure' not in resp.text):
             device_id = None
@@ -684,7 +687,7 @@ def fetch_graph_html():
         login(sess, load_config_yaml())
         device_id = device_id_from_cookies(sess.cookies)
         log_url = f'{BASE_URL}/Device/GraphTimeSeries?deviceId={device_id}'
-        resp = sess.get(log_url, verify=CA_BUNDLE)
+        resp = sess.get(log_url, **SESS_KWARGS)
         if (resp.status_code != 200 or
                 'Central heating water pressure' not in resp.text):
             raise ValueError((resp, resp.text))
